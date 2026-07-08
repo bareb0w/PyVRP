@@ -52,12 +52,14 @@ Contents
    notebooks/optional_clients
    notebooks/mutually_exclusive_groups
    notebooks/reloading
+   notebooks/driver_breaks
 
 .. toctree::
    :maxdepth: 1
    :caption: API reference
 
    api/pyvrp
+   api/breaks
    api/search
    api/plotting
    api/stop

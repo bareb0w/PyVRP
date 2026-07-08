@@ -30,6 +30,15 @@ from ._pyvrp import Route as Route
 from ._pyvrp import ScheduledActivity as ScheduledActivity
 from ._pyvrp import Solution as Solution
 from ._pyvrp import VehicleType as VehicleType
+from .breaks import EU_RULES as EU_RULES
+from .breaks import CompliantSchedule as CompliantSchedule
+from .breaks import DriverRules as DriverRules
+from .breaks import EntryType as EntryType
+from .breaks import ScheduleEntry as ScheduleEntry
+from .breaks import break_aware_durations as break_aware_durations
+from .breaks import plan_breaks as plan_breaks
+from .breaks import plan_route_breaks as plan_route_breaks
+from .breaks import solve_with_breaks as solve_with_breaks
 from .minimise_fleet import minimise_fleet as minimise_fleet
 from .read import read as read
 from .read import read_solution as read_solution
