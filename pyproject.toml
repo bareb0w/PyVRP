@@ -1,7 +1,7 @@
 [project]
-name = "pyvrp"
+name = "pyvrp-scc"
 version = "0.14.0a0"
-description = "A state-of-the-art vehicle routing problem solver."
+description = "SCC fork of PyVRP, adding driver break/overnight planning and vehicle-client compatibility. Imports as `pyvrp`."
 authors = [
     { name = "Niels Wouda", email = "nielswouda@gmail.com" },
     { name = "Leon Lan", email = "leon.lanyidong@gmail.com" },

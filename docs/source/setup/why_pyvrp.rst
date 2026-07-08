@@ -98,6 +98,7 @@ Feature comparison
 .. [#skills]
    Matching visits and vehicles based on skills that the visit requires, and the vehicle must have.
    PyVRP uses load constraints for this; see our :doc:`../notebooks/load` tutorial for an example.
+   The :meth:`~pyvrp.Model.Model.add_client` and :meth:`~pyvrp.Model.Model.add_vehicle_type` methods also expose ``required_skills``, ``skills``, and ``allowed_vehicle_types`` arguments that set this up for you; see the :doc:`../notebooks/compatibility` tutorial.
 
 
 Strengths and weaknesses

@@ -1,5 +1,5 @@
 import logging
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from time import perf_counter
 
 from pyvrp._pyvrp import ProblemData
@@ -8,6 +8,17 @@ from .Result import Result
 from .Statistics import Statistics
 
 logger = logging.getLogger(__name__)
+
+
+def _pyvrp_version() -> str:
+    # This is a fork distributed as "pyvrp-scc" but imported as "pyvrp"; fall
+    # back to the upstream name when installed under it.
+    for dist in ("pyvrp-scc", "pyvrp"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "unknown"
 
 
 # Templates for various different outputs.
@@ -116,7 +127,7 @@ class ProgressPrinter:
         vehicle_type_text = f"{num_vt} vehicle type{'s' if num_vt > 1 else ''}"
 
         msg = _START.format(
-            version=version("pyvrp"),
+            version=_pyvrp_version(),
             depot_text=depot_text,
             client_text=client_text,
             vehicle_text=vehicle_text,

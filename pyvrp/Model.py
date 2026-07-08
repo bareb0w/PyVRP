@@ -112,6 +112,15 @@ class Model:
         self._profiles: list[Profile] = []
         self._vehicle_types: list[VehicleType] = []
 
+        # Vehicle-client compatibility metadata, index-aligned with the
+        # ``_clients`` and ``_vehicle_types`` lists above. These are compiled
+        # into additional load dimensions when building the problem data; see
+        # ``_apply_compatibility``. The C++ Client/VehicleType objects cannot
+        # store this, so it is kept here on the Python side.
+        self._vehicle_skills: list[list[str]] = []
+        self._client_required_skills: list[list[str]] = []
+        self._client_allowed_vehicles: list[list[VehicleType | str]] = []
+
     @property
     def clients(self) -> list[Client]:
         """
@@ -240,10 +249,29 @@ class Model:
         group: ClientGroup | None = None,
         *,
         name: str = "",
+        required_skills: list[str] = [],
+        allowed_vehicle_types: list[VehicleType | str] = [],
     ) -> Client:
         """
         Adds a client with the given attributes to the model. Returns the
         created :class:`~pyvrp._pyvrp.Client` instance.
+
+        The ``required_skills`` and ``allowed_vehicle_types`` arguments
+        restrict which vehicle types may serve this client. These are compiled
+        into additional load dimensions when the problem data is built, which
+        makes the restriction a hard constraint (an incompatible assignment is
+        infeasible). See :meth:`~add_vehicle_type` for the vehicle side.
+
+        Parameters
+        ----------
+        required_skills
+            Skills this client requires. Only vehicle types that have *all* of
+            these skills (see :meth:`~add_vehicle_type`) may serve this client.
+            Empty by default, meaning no skill requirement.
+        allowed_vehicle_types
+            The vehicle types allowed to serve this client, given as
+            :class:`~pyvrp._pyvrp.VehicleType` instances or their names. Empty
+            by default, meaning any vehicle type may serve this client.
 
         Raises
         ------
@@ -287,6 +315,8 @@ class Model:
             self._groups[group_idx].add_client(client_idx)
 
         self._clients.append(client)
+        self._client_required_skills.append(list(required_skills))
+        self._client_allowed_vehicles.append(list(allowed_vehicle_types))
         return client
 
     def add_client_group(
@@ -392,6 +422,7 @@ class Model:
         unit_overtime_cost: int = 0,
         *,
         name: str = "",
+        skills: list[str] = [],
     ) -> VehicleType:
         """
         Adds a vehicle type with the given attributes to the model. Returns the
@@ -401,6 +432,14 @@ class Model:
 
            The vehicle type is assigned to the first depot if no depot
            information is provided.
+
+        Parameters
+        ----------
+        skills
+            Skills that vehicles of this type have. A client that requires
+            skills (see :meth:`~add_client`) may only be served by vehicle
+            types that have all of the client's required skills. Empty by
+            default.
 
         Raises
         ------
@@ -465,6 +504,7 @@ class Model:
         )
 
         self._vehicle_types.append(vehicle_type)
+        self._vehicle_skills.append(list(skills))
         return vehicle_type
 
     def data(self, missing_value: int = MAX_VALUE) -> ProblemData:
@@ -519,15 +559,141 @@ class Model:
             distances = [base_distance]
             durations = [base_duration]
 
+        # Compile any vehicle-client compatibility (skills / allowed vehicle
+        # types) into additional load dimensions. Returns the clients and
+        # vehicle types unchanged when no compatibility is used.
+        clients, vehicle_types = self._apply_compatibility()
+
         return ProblemData(
             self._locations,
-            self._clients,
+            clients,
             self._depots,
-            self.vehicle_types,
+            vehicle_types,
             distances,
             durations,
             self._groups,
         )
+
+    def _apply_compatibility(
+        self,
+    ) -> tuple[list[Client], list[VehicleType]]:
+        """
+        Compiles the vehicle-client compatibility metadata (client required
+        skills and allowed vehicle types, and vehicle type skills) into extra
+        load dimensions, appended after any existing load dimensions. Returns
+        new client and vehicle type lists with the additional dimensions. When
+        no compatibility is used, the original lists are returned unchanged.
+
+        A client requiring a skill (or forbidding a vehicle type) is given one
+        unit of "demand" in a dedicated dimension; only compatible vehicles
+        have capacity in that dimension, so an incompatible assignment incurs
+        excess load and is thus infeasible.
+        """
+        clients = self._clients
+        vehicles = self._vehicle_types
+        num_types = len(vehicles)
+
+        # Metadata may be shorter than the client/vehicle lists (e.g. when the
+        # model was built via ``from_data``). Pad with empty defaults.
+        veh_skills = self._vehicle_skills + [[]] * (
+            num_types - len(self._vehicle_skills)
+        )
+        req_skills = self._client_required_skills + [[]] * (
+            len(clients) - len(self._client_required_skills)
+        )
+        allowed_meta = self._client_allowed_vehicles + [[]] * (
+            len(clients) - len(self._client_allowed_vehicles)
+        )
+
+        # Resolve each client's allowed vehicle-type indices. ``None`` denotes
+        # an unrestricted client (the default).
+        name2idx: dict[str, int] = {}
+        for idx, veh in enumerate(vehicles):
+            if veh.name:
+                name2idx.setdefault(veh.name, idx)
+
+        allowed_sets: list[set[int] | None] = []
+        for allowed in allowed_meta:
+            if not allowed:
+                allowed_sets.append(None)
+                continue
+
+            idxs = set()
+            for ref in allowed:
+                if isinstance(ref, str):
+                    if ref not in name2idx:
+                        msg = f"Unknown vehicle type name '{ref}'."
+                        raise ValueError(msg)
+                    idxs.add(name2idx[ref])
+                elif (vt_idx := _idx_by_id(ref, vehicles)) is not None:
+                    idxs.add(vt_idx)
+                else:
+                    msg = "An allowed vehicle type is not in this model."
+                    raise ValueError(msg)
+
+            allowed_sets.append(idxs)
+
+        skills = sorted(
+            {s for skls in veh_skills for s in skls}
+            | {s for req in req_skills for s in req}
+        )
+
+        # A vehicle-type dimension is only needed for types that at least one
+        # client forbids.
+        restricted = sorted(
+            {
+                t
+                for allowed in allowed_sets
+                if allowed is not None
+                for t in range(num_types)
+                if t not in allowed
+            }
+        )
+
+        if not skills and not restricted:  # nothing to compile
+            return clients, vehicles
+
+        # Every required client must be servable by at least one vehicle type
+        # that has all its skills and is allowed.
+        for c_idx, client in enumerate(clients):
+            if not client.required:
+                continue
+
+            needed = set(req_skills[c_idx])
+            allowed_idxs = allowed_sets[c_idx]
+            if not any(
+                needed <= set(veh_skills[t])
+                and (allowed_idxs is None or t in allowed_idxs)
+                for t in range(num_types)
+            ):
+                msg = (
+                    f"Required client {c_idx} cannot be served by any vehicle "
+                    "type given its skills and allowed vehicle types."
+                )
+                raise ValueError(msg)
+
+        big = max(len(clients), 1)  # safe upper bound on per-dimension load
+        base_dim = _base_load_dim(clients, vehicles)
+
+        new_clients = []
+        for c_idx, client in enumerate(clients):
+            needed = set(req_skills[c_idx])
+            allowed_idxs = allowed_sets[c_idx]
+            extra = [1 if s in needed else 0 for s in skills]
+            extra += [
+                1 if allowed_idxs is not None and t not in allowed_idxs else 0
+                for t in restricted
+            ]
+            new_clients.append(_extend_client(client, base_dim, extra))
+
+        new_vehicles = []
+        for t_idx, veh in enumerate(vehicles):
+            has = set(veh_skills[t_idx])
+            extra = [big if s in has else 0 for s in skills]
+            extra += [0 if t == t_idx else big for t in restricted]
+            new_vehicles.append(_extend_vehicle(veh, base_dim, extra))
+
+        return new_clients, new_vehicles
 
     def solve(
         self,
@@ -593,3 +759,67 @@ def _idx_by_id(item: object, container: Sequence[object]) -> int | None:
             return idx
 
     return None
+
+
+def _base_load_dim(
+    clients: Sequence[Client],
+    vehicles: Sequence[VehicleType],
+) -> int:
+    """
+    Returns the number of existing load dimensions, taken as the largest load
+    vector length among the given clients and vehicle types. Existing data is
+    padded to this length before appending compatibility dimensions.
+    """
+    dim = 0
+    for client in clients:
+        dim = max(dim, len(client.delivery), len(client.pickup))
+    for vehicle in vehicles:
+        dim = max(dim, len(vehicle.capacity), len(vehicle.initial_load))
+    return dim
+
+
+def _pad(values: Sequence[int], length: int) -> list[int]:
+    """
+    Right-pads the given sequence with zeros to the requested length.
+    """
+    return list(values) + [0] * (length - len(values))
+
+
+def _extend_client(
+    client: Client, base_dim: int, extra_delivery: list[int]
+) -> Client:
+    """
+    Returns a copy of the client whose load vectors are padded to ``base_dim``
+    and then extended with the given extra delivery amounts (and matching zero
+    pickups) for the appended compatibility dimensions.
+    """
+    zeros = [0] * len(extra_delivery)
+    return Client(
+        location=client.location,
+        delivery=_pad(client.delivery, base_dim) + extra_delivery,
+        pickup=_pad(client.pickup, base_dim) + zeros,
+        service_duration=client.service_duration,
+        tw_early=client.tw_early,
+        tw_late=client.tw_late,
+        release_time=client.release_time,
+        prize=client.prize,
+        required=client.required,
+        group=client.group,
+        name=client.name,
+    )
+
+
+def _extend_vehicle(
+    vehicle: VehicleType, base_dim: int, extra_capacity: list[int]
+) -> VehicleType:
+    """
+    Returns a copy of the vehicle type whose capacity and initial load are
+    padded to ``base_dim`` and then extended with the given extra capacities
+    (and matching zero initial loads) for the appended compatibility
+    dimensions.
+    """
+    zeros = [0] * len(extra_capacity)
+    return vehicle.replace(
+        capacity=_pad(vehicle.capacity, base_dim) + extra_capacity,
+        initial_load=_pad(vehicle.initial_load, base_dim) + zeros,
+    )

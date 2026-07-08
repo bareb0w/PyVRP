@@ -1,8 +1,19 @@
 import logging
 import sys
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 logger = logging.getLogger(__name__)
+
+
+def _pyvrp_version() -> str:
+    # Distributed as "pyvrp-scc" but imported as "pyvrp"; fall back to the
+    # upstream name when installed under it.
+    for dist in ("pyvrp-scc", "pyvrp"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "unknown"
 
 
 def show_versions():
@@ -30,7 +41,7 @@ def show_versions():
 
     logger.info("INSTALLED VERSIONS")
     logger.info("------------------")
-    logger.info(f"     pyvrp: {version('pyvrp')}")
+    logger.info(f"     pyvrp: {_pyvrp_version()}")
     logger.info(f"     numpy: {version('numpy')}")
     logger.info(f"matplotlib: {version('matplotlib')}")
     logger.info(f"    vrplib: {version('vrplib')}")
