@@ -124,6 +124,8 @@ def solve_with_breaks(
         is found, that result is returned immediately; otherwise the result of
         the final attempt is returned.
     """
+    import copy
+
     from pyvrp.solve import solve
 
     if isinstance(model_or_data, ProblemData):
@@ -133,14 +135,21 @@ def solve_with_breaks(
 
     best: tuple[Result, list[CompliantSchedule]] | None = None
     factor = 1.0
-    for _ in range(max_iters):
+    for attempt in range(max_iters):
         inflated = break_aware_durations(
             data,
             rules,
             reserve_daily_rest=reserve_daily_rest,
             reserve_factor=factor,
         )
-        result = solve(inflated, stop, seed=seed, **kwargs)
+
+        # Stopping criteria are stateful: e.g. MaxRuntime starts its clock on
+        # first call and stays expired forever after. Give every attempt a
+        # fresh copy so retries get their full budget, rather than
+        # terminating immediately after the first attempt used it up.
+        result = solve(
+            inflated, copy.deepcopy(stop), seed=seed + attempt, **kwargs
+        )
 
         # Re-evaluate the found routes on the original (non-inflated) data so
         # that the planned schedule uses real travel times, then insert rests.
