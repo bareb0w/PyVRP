@@ -337,3 +337,66 @@ def test_allows_negative_fixed_cost():
     """
     veh_type = VehicleType(fixed_cost=-100)
     assert_equal(veh_type.fixed_cost, -100)
+
+
+def test_break_params_default_to_disabled():
+    """
+    By default a vehicle type has no driving breaks: break_duration is zero and
+    max_continuous_driving is unconstrained.
+    """
+    veh_type = VehicleType()
+    assert_equal(veh_type.break_duration, 0)
+    assert_equal(veh_type.max_continuous_driving, _INT_MAX)
+
+
+def test_break_params_attribute_access():
+    """
+    Tests that the break parameters can be set and read back.
+    """
+    veh_type = VehicleType(max_continuous_driving=270, break_duration=45)
+    assert_equal(veh_type.max_continuous_driving, 270)
+    assert_equal(veh_type.break_duration, 45)
+
+
+@pytest.mark.parametrize(
+    ("max_continuous_driving", "break_duration"),
+    [
+        (-1, 0),  # negative max_continuous_driving
+        (270, -1),  # negative break_duration
+        (_INT_MAX, 45),  # break without a finite continuous-driving limit
+    ],
+)
+def test_raises_invalid_break_data(
+    max_continuous_driving: int, break_duration: int
+):
+    """
+    Tests that invalid break parameters are rejected.
+    """
+    with assert_raises(ValueError):
+        VehicleType(
+            max_continuous_driving=max_continuous_driving,
+            break_duration=break_duration,
+        )
+
+
+def test_break_params_replace_and_pickle():
+    """
+    Tests that break parameters survive replace() and a pickle round-trip, and
+    participate in equality.
+    """
+    veh_type = VehicleType(max_continuous_driving=270, break_duration=45)
+
+    # replace() overrides one field and carries the other.
+    replaced = veh_type.replace(break_duration=30)
+    assert_equal(replaced.break_duration, 30)
+    assert_equal(replaced.max_continuous_driving, 270)
+    assert_equal(veh_type.replace(num_available=5).break_duration, 45)
+
+    # pickle round-trip preserves the fields and equality.
+    unpickled = pickle.loads(pickle.dumps(veh_type))
+    assert_equal(unpickled.break_duration, 45)
+    assert_equal(unpickled.max_continuous_driving, 270)
+    assert_(unpickled == veh_type)
+
+    # The break fields distinguish vehicle types under equality.
+    assert_(veh_type != VehicleType())

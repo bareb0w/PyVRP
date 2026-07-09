@@ -178,6 +178,8 @@ class VehicleType:
     max_reloads: int
     max_overtime: int
     unit_overtime_cost: int
+    max_continuous_driving: int
+    break_duration: int
     max_duration: int
     name: str
     def __init__(
@@ -200,6 +202,8 @@ class VehicleType:
         max_reloads: int = ...,
         max_overtime: int = 0,
         unit_overtime_cost: int = 0,
+        max_continuous_driving: int = ...,
+        break_duration: int = 0,
         *,
         name: str = "",
     ) -> None: ...
@@ -225,6 +229,8 @@ class VehicleType:
         max_reloads: int | None = None,
         max_overtime: int | None = None,
         unit_overtime_cost: int | None = None,
+        max_continuous_driving: int | None = None,
+        break_duration: int | None = None,
         *,
         name: str | None = None,
     ) -> VehicleType: ...

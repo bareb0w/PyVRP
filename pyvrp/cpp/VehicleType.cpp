@@ -46,6 +46,8 @@ VehicleType::VehicleType(size_t numAvailable,
                          size_t maxReloads,
                          Duration maxOvertime,
                          Cost unitOvertimeCost,
+                         Duration maxContinuousDriving,
+                         Duration breakDuration,
                          std::string name)
     : numAvailable(numAvailable),
       startDepot(startDepot),
@@ -65,6 +67,8 @@ VehicleType::VehicleType(size_t numAvailable,
       maxReloads(maxReloads),
       maxOvertime(maxOvertime),
       unitOvertimeCost(unitOvertimeCost),
+      maxContinuousDriving(maxContinuousDriving),
+      breakDuration(breakDuration),
       // We need to check >= 0 here to avoid overflow. If the arguments are
       // negative the validation checks further below will raise, so it doesn't
       // matter what we set as long as we get to those checks.
@@ -114,6 +118,20 @@ VehicleType::VehicleType(size_t numAvailable,
 
     if (unitOvertimeCost < 0)
         throw std::invalid_argument("unit_overtime_cost must be >= 0.");
+
+    if (maxContinuousDriving < 0)
+        throw std::invalid_argument("max_continuous_driving must be >= 0.");
+
+    if (breakDuration < 0)
+        throw std::invalid_argument("break_duration must be >= 0.");
+
+    if (breakDuration > 0
+        && maxContinuousDriving == std::numeric_limits<Duration>::max())
+    {
+        auto const *msg
+            = "break_duration > 0 requires a finite max_continuous_driving.";
+        throw std::invalid_argument(msg);
+    }
 }
 
 VehicleType::VehicleType(VehicleType const &vehicleType)
@@ -135,6 +153,8 @@ VehicleType::VehicleType(VehicleType const &vehicleType)
       maxReloads(vehicleType.maxReloads),
       maxOvertime(vehicleType.maxOvertime),
       unitOvertimeCost(vehicleType.unitOvertimeCost),
+      maxContinuousDriving(vehicleType.maxContinuousDriving),
+      breakDuration(vehicleType.breakDuration),
       maxDuration(vehicleType.maxDuration),
       name(duplicate(vehicleType.name))
 {
@@ -159,6 +179,8 @@ VehicleType::VehicleType(VehicleType &&vehicleType)
       maxReloads(vehicleType.maxReloads),
       maxOvertime(vehicleType.maxOvertime),
       unitOvertimeCost(vehicleType.unitOvertimeCost),
+      maxContinuousDriving(vehicleType.maxContinuousDriving),
+      breakDuration(vehicleType.breakDuration),
       maxDuration(vehicleType.maxDuration),
       name(vehicleType.name)  // we can steal
 {
@@ -186,6 +208,8 @@ VehicleType::replace(std::optional<size_t> numAvailable,
                      std::optional<size_t> maxReloads,
                      std::optional<Duration> maxOvertime,
                      std::optional<Cost> unitOvertimeCost,
+                     std::optional<Duration> maxContinuousDriving,
+                     std::optional<Duration> breakDuration,
                      std::optional<std::string> name) const
 {
     return {numAvailable.value_or(this->numAvailable),
@@ -206,7 +230,15 @@ VehicleType::replace(std::optional<size_t> numAvailable,
             maxReloads.value_or(this->maxReloads),
             maxOvertime.value_or(this->maxOvertime),
             unitOvertimeCost.value_or(this->unitOvertimeCost),
+            maxContinuousDriving.value_or(this->maxContinuousDriving),
+            breakDuration.value_or(this->breakDuration),
             name.value_or(this->name)};
+}
+
+bool VehicleType::breaksEnabled() const
+{
+    return breakDuration > 0
+           && maxContinuousDriving < std::numeric_limits<Duration>::max();
 }
 
 size_t VehicleType::maxTrips() const
@@ -237,6 +269,8 @@ bool VehicleType::operator==(VehicleType const &other) const
         && maxReloads == other.maxReloads
         && maxOvertime == other.maxOvertime
         && unitOvertimeCost == other.unitOvertimeCost
+        && maxContinuousDriving == other.maxContinuousDriving
+        && breakDuration == other.breakDuration
         && std::strcmp(name, other.name) == 0;
     // clang-format on
 }
