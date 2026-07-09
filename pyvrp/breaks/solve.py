@@ -83,6 +83,7 @@ def solve_with_breaks(
     reserve_daily_rest: bool = True,
     max_iters: int = 4,
     growth: float = 1.5,
+    depot_rest_only: set[int] | None = None,
     **kwargs,
 ) -> tuple[Result, list[CompliantSchedule]]:
     """
@@ -113,6 +114,10 @@ def solve_with_breaks(
         time the resulting schedules are not time-feasible. Default four.
     growth
         Factor by which the reserved room grows between attempts. Default 1.5.
+    depot_rest_only
+        Vehicle type indices whose vehicles must take their daily rests at a
+        depot; see :func:`~pyvrp.breaks.schedule.plan_breaks`. Default
+        ``None`` (no such vehicles).
     **kwargs
         Additional keyword arguments passed on to :func:`~pyvrp.solve.solve`.
 
@@ -153,12 +158,20 @@ def solve_with_breaks(
 
         # Re-evaluate the found routes on the original (non-inflated) data so
         # that the planned schedule uses real travel times, then insert rests.
+        at_depot = depot_rest_only or set()
         schedules = []
         for route in result.best.routes():
             inner = list(route)[1:-1]  # drop implicit start and end depots
             activities = [Activity(act.type, act.idx) for act in inner]
             rebuilt = Route(data, activities, route.vehicle_type())
-            schedules.append(plan_route_breaks(rebuilt, data, rules))
+            schedules.append(
+                plan_route_breaks(
+                    rebuilt,
+                    data,
+                    rules,
+                    rest_at_depot_only=route.vehicle_type() in at_depot,
+                )
+            )
 
         best = (result, schedules)
         if all(schedule.is_feasible for schedule in schedules):

@@ -114,10 +114,12 @@ class CompliantSchedule:
         entries: list[ScheduleEntry],
         rules: DriverRules,
         total_driving: int,
+        num_offsite_rests: int = 0,
     ):
         self._entries = entries
         self._rules = rules
         self._total_driving = total_driving
+        self._num_offsite_rests = num_offsite_rests
 
     @property
     def entries(self) -> list[ScheduleEntry]:
@@ -209,14 +211,25 @@ class CompliantSchedule:
         return sum(e.time_warp for e in self._entries)
 
     @property
+    def num_offsite_rests(self) -> int:
+        """
+        Number of daily rests taken away from a depot while the vehicle was
+        required to rest at a depot (see the ``rest_at_depot_only`` argument
+        of :func:`plan_route_breaks`). Always zero when that policy is off.
+        """
+        return self._num_offsite_rests
+
+    @property
     def is_feasible(self) -> bool:
         """
-        Whether the augmented schedule is time-feasible, that is, whether all
-        stops are still served within their time windows after inserting the
-        required breaks and rests. When this is ``False``, inserting the
-        legally required rest pushed one or more stops past their time window.
+        Whether the augmented schedule is feasible: all stops are still
+        served within their time windows after inserting the required breaks
+        and rests, and no daily rest violates the vehicle's depot-only rest
+        policy. When this is ``False``, inserting the legally required rest
+        pushed one or more stops past their time window, or forced an
+        overnight stop away from a depot for a vehicle that must rest at one.
         """
-        return self.time_warp == 0
+        return self.time_warp == 0 and self._num_offsite_rests == 0
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -253,6 +266,8 @@ def plan_route_breaks(
     route: Route,
     data: ProblemData,
     rules: DriverRules = EU_RULES,
+    *,
+    rest_at_depot_only: bool = False,
 ) -> CompliantSchedule:
     """
     Plans breaks and daily (overnight) rests for a single solved route, so that
@@ -266,6 +281,13 @@ def plan_route_breaks(
     *anywhere en route*, including part-way along a leg at the exact point a
     limit is hit.
 
+    Waiting time is used for rest where possible: a wait long enough to hold a
+    full daily rest absorbs one (placed at the end of the wait, so the new day
+    starts as late as possible), and a wait of at least the break duration
+    satisfies a pending break. This matters for multi-day routes, where the
+    overnight gap between one day's time windows closing and the next day's
+    opening naturally hosts the daily rest at no extra cost.
+
     Parameters
     ----------
     route
@@ -277,6 +299,11 @@ def plan_route_breaks(
         drive the simulation.
     rules
         The driving-time rules to comply with. Defaults to :data:`EU_RULES`.
+    rest_at_depot_only
+        When ``True``, this vehicle must take its daily rests at a depot.
+        Daily rests that end up elsewhere are counted in
+        :attr:`CompliantSchedule.num_offsite_rests` and make the schedule
+        infeasible. Default ``False`` (rests may be taken anywhere).
 
     Returns
     -------
@@ -287,11 +314,16 @@ def plan_route_breaks(
     durations = data.duration_matrix(veh.profile)
     schedule = route.schedule()
 
+    depot_locations = {
+        data.depot(idx).location for idx in range(data.num_depots)
+    }
+
     entries: list[ScheduleEntry] = []
 
     driving_since_break = 0
     driving_today = 0
     day = 0
+    offsite_rests = 0
     day_start = route.start_time()
     now = route.start_time()
 
@@ -334,6 +366,8 @@ def plan_route_breaks(
                             day,
                         )
                     )
+                    if rest_at_depot_only and prev_loc not in depot_locations:
+                        offsite_rests += 1
                     now = end
                     driving_today = 0
                     driving_since_break = 0
@@ -361,14 +395,37 @@ def plan_route_breaks(
         # early, and record time warp if we are late.
         tw_early, tw_late = _time_window_of(data, act)
         wait = max(tw_early - now, 0)
-        now += wait
 
-        # A sufficiently long wait lets the driver rest, satisfying a pending
-        # break without adding further time. Absorb it so we do not double
-        # count rest.
-        if wait >= rules.break_duration:
+        # A sufficiently long wait lets the driver rest without adding
+        # further time. A wait that can hold a full daily rest absorbs one,
+        # placed at the END of the wait so the new day's driving and duty
+        # budgets start as late as possible; a shorter wait of at least the
+        # break duration satisfies a pending break. Absorbing avoids double
+        # counting rest.
+        if wait >= rules.daily_rest_duration:
+            rest_end = tw_early
+            rest_start = rest_end - rules.daily_rest_duration
+            entries.append(
+                _rest_entry(
+                    EntryType.DAILY_REST,
+                    rest_start,
+                    rest_end,
+                    prev_loc,
+                    act.trip,
+                    day,
+                )
+            )
+            if rest_at_depot_only and prev_loc not in depot_locations:
+                offsite_rests += 1
+            driving_today = 0
+            driving_since_break = 0
+            day += 1
+            day_start = rest_end
+            wait -= rules.daily_rest_duration  # residual, pre-rest wait
+        elif wait >= rules.break_duration:
             driving_since_break = 0
 
+        now = max(now, tw_early)
         time_warp = max(now - tw_late, 0)
         service = _service_of(data, act)
         entries.append(
@@ -377,13 +434,17 @@ def plan_route_breaks(
         now += service
         prev_loc = cur_loc
 
-    return CompliantSchedule(entries, rules, route.travel_duration())
+    return CompliantSchedule(
+        entries, rules, route.travel_duration(), offsite_rests
+    )
 
 
 def plan_breaks(
     solution: Result | Solution,
     data: ProblemData,
     rules: DriverRules = EU_RULES,
+    *,
+    depot_rest_only: set[int] | None = None,
 ) -> list[CompliantSchedule]:
     """
     Plans breaks and daily rests for every route in a solution.
@@ -397,6 +458,10 @@ def plan_breaks(
         The problem data the solution was solved against.
     rules
         The driving-time rules to comply with. Defaults to :data:`EU_RULES`.
+    depot_rest_only
+        Vehicle type indices whose vehicles must take their daily rests at a
+        depot; see the ``rest_at_depot_only`` argument of
+        :func:`plan_route_breaks`. Default ``None`` (no such vehicles).
 
     Returns
     -------
@@ -406,7 +471,16 @@ def plan_breaks(
     if not isinstance(solution, Solution):  # then it is a Result
         solution = solution.best
 
-    return [plan_route_breaks(r, data, rules) for r in solution.routes()]
+    at_depot = depot_rest_only or set()
+    return [
+        plan_route_breaks(
+            route,
+            data,
+            rules,
+            rest_at_depot_only=route.vehicle_type() in at_depot,
+        )
+        for route in solution.routes()
+    ]
 
 
 def _location_of(data: ProblemData, act: Activity) -> int:
