@@ -1,4 +1,6 @@
 #include "Route.h"
+
+#include "BreakTiming.h"
 #include "DurationSegment.h"
 #include "LoadSegment.h"
 
@@ -213,98 +215,55 @@ void Route::setSchedule(ProblemData const &data, Activities const &activities)
 void Route::applyBreaks(ProblemData const &data, Activities const &activities)
 {
     // Recomputes duration_ and time_warp_ so that they account for the driving
-    // breaks this vehicle type requires. The route's stop sequence and start
-    // time are kept fixed; the timeline is simulated forward from startTime_,
-    // inserting a break whenever continuous driving reaches the limit (a break
-    // may fall part-way along a leg). This mirrors
-    // pyvrp.breaks.schedule.plan_route_breaks, which is the reference. Unlike
-    // the solver's usual "teleport" time warp, lateness here cascades forward
-    // (now is not reset by time warp), matching a real driver's clock.
+    // breaks this vehicle type requires, keeping the stop sequence and start
+    // time fixed. The shared simulateBreaks() does the forward simulation; see
+    // BreakTiming.h. This makes solved routes' timing match
+    // pyvrp.breaks.schedule.plan_route_breaks.
     auto const &vehData = data.vehicleType(vehicleType_);
     auto const &durations = data.durationMatrix(vehData.profile);
     auto const &start = data.depot(vehData.startDepot);
     auto const &end = data.depot(vehData.endDepot);
 
-    auto const maxContinuous = vehData.maxContinuousDriving;
-    auto const breakDuration = vehData.breakDuration;
-
-    Duration now = startTime_;
-    Duration drivingSinceBreak = 0;
-    Duration waitTotal = 0;
-    Duration twTotal = 0;
-    Duration breakTotal = 0;
-    size_t prevLoc = start.location;
-
-    // Start depot: startTime_ already respects its window, so no wait here.
-    now += start.serviceDuration;
-
-    auto const driveLeg = [&](size_t loc)
-    {
-        Duration remaining = durations(prevLoc, loc);
-        while (remaining > 0)
-        {
-            Duration const room = maxContinuous - drivingSinceBreak;
-            if (room <= 0)  // a break is required before driving further
-            {
-                breakTotal += breakDuration;
-                now += breakDuration;
-                drivingSinceBreak = 0;
-                continue;
-            }
-
-            Duration const drive = std::min(remaining, room);
-            now += drive;
-            drivingSinceBreak += drive;
-            remaining -= drive;
-        }
-        prevLoc = loc;
-    };
-
-    auto const arrive
-        = [&](Duration twEarly, Duration twLate, Duration service)
-    {
-        Duration const wait = std::max<Duration>(twEarly - now, 0);
-        if (wait >= breakDuration)  // a long enough wait satisfies a break
-            drivingSinceBreak = 0;
-        now = std::max(now, twEarly);
-        twTotal += std::max<Duration>(now - twLate, 0);
-        waitTotal += wait;
-        now += service;
-    };
+    // Build the per-stop timeline: start depot, activities, end depot.
+    std::vector<size_t> locs = {start.location};
+    std::vector<Duration> twEarly = {start.twEarly};
+    std::vector<Duration> twLate = {start.twLate};
+    std::vector<Duration> service = {start.serviceDuration};
 
     for (auto const &activity : activities)
-    {
-        auto const loc = activity.isDepot()
-                             ? data.depot(activity.idx()).location
-                             : data.client(activity.idx()).location;
-        driveLeg(loc);
-
         if (activity.isDepot())
         {
             auto const &depot = data.depot(activity.idx());
-            arrive(depot.twEarly, depot.twLate, depot.serviceDuration);
+            locs.push_back(depot.location);
+            twEarly.push_back(depot.twEarly);
+            twLate.push_back(depot.twLate);
+            service.push_back(depot.serviceDuration);
         }
         else
         {
             auto const &client = data.client(activity.idx());
-            arrive(client.twEarly, client.twLate, client.serviceDuration);
+            locs.push_back(client.location);
+            twEarly.push_back(client.twEarly);
+            twLate.push_back(client.twLate);
+            service.push_back(client.serviceDuration);
         }
-    }
 
-    driveLeg(end.location);
-    arrive(end.twEarly, end.twLate, 0);
+    locs.push_back(end.location);
+    twEarly.push_back(end.twEarly);
+    twLate.push_back(end.twLate);
+    service.push_back(0);  // end depot service is not counted
 
-    // Total time actually spent = driving + service + waiting + breaks. Time
-    // warp is tracked separately (it does not extend the timeline).
-    duration_ = travel_ + service_ + waitTotal + breakTotal;
-    timeWarp_ = twTotal;
-
-    // Fold any maximum-duration violation into time warp, as the segment-based
-    // timeWarp(maxDuration) does on the non-break path.
-    auto const netDuration = duration_ - timeWarp_;
-    if (netDuration > vehData.maxDuration)
-        timeWarp_ += netDuration - vehData.maxDuration;
-
+    auto const [duration, timeWarp] = simulateBreaks(startTime_,
+                                                     locs,
+                                                     twEarly,
+                                                     twLate,
+                                                     service,
+                                                     durations,
+                                                     vehData.maxContinuousDriving,
+                                                     vehData.breakDuration,
+                                                     vehData.maxDuration);
+    duration_ = duration;
+    timeWarp_ = timeWarp;
     overtime_ = std::max<Duration>(duration_ - vehData.shiftDuration, 0);
     durationCost_ = vehData.unitDurationCost * static_cast<Cost>(duration_)
                     + vehData.unitOvertimeCost * static_cast<Cost>(overtime_);

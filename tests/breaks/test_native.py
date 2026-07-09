@@ -11,8 +11,18 @@ import numpy as np
 import pytest
 from numpy.testing import assert_equal
 
-from pyvrp import Client, Depot, Location, ProblemData, Route, VehicleType
+from pyvrp import (
+    ActivityType,
+    Client,
+    Depot,
+    Location,
+    ProblemData,
+    Route,
+    VehicleType,
+)
 from pyvrp.breaks import DriverRules, plan_route_breaks
+from pyvrp.search._search import Node
+from pyvrp.search._search import Route as SearchRoute
 
 # Breaks only: the daily limits are pushed out of reach so no daily rest is
 # ever inserted, matching the native code, which currently models only breaks.
@@ -85,6 +95,32 @@ def test_native_matches_plan_route_breaks(name, dur, windows, service, visits):
 
     data = _data(dur, windows, service, breaks=True)
     route = Route(data, visits, 0)
+
+    assert_equal(route.duration(), ref_span)
+    assert_equal(route.time_warp(), schedule.time_warp)
+
+
+@pytest.mark.parametrize(
+    ("name", "dur", "windows", "service", "visits"),
+    CASES,
+    ids=[c[0] for c in CASES],
+)
+def test_search_route_matches_plan_route_breaks(
+    name, dur, windows, service, visits
+):
+    """
+    The search-side ``Route`` (used during optimisation) is also break-aware:
+    its ``duration()`` and ``time_warp()`` match ``plan_route_breaks``.
+    """
+    ref_data = _data(dur, windows, service, breaks=False)
+    schedule = plan_route_breaks(Route(ref_data, visits, 0), ref_data, BREAKS_ONLY)
+    ref_span = schedule.entries[-1].end_time - schedule.entries[0].start_time
+
+    data = _data(dur, windows, service, breaks=True)
+    route = SearchRoute(data, 0)
+    for idx in visits:
+        route.append(Node(ActivityType.CLIENT, idx))
+    route.update()
 
     assert_equal(route.duration(), ref_span)
     assert_equal(route.time_warp(), schedule.time_warp)

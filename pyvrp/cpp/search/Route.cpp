@@ -1,5 +1,7 @@
 #include "Route.h"
 
+#include "../BreakTiming.h"
+
 #include <ostream>
 #include <utility>
 
@@ -329,6 +331,47 @@ void Route::update()
 
     duration_ = durAfter[0].duration();
     timeWarp_ = durAfter[0].timeWarp(maxDuration());
+
+    if (vehicleType_.breaksEnabled())
+    {
+        // Replace the segment-based timing with an exact break-aware forward
+        // simulation (see BreakTiming.h), so the accepted route's duration and
+        // time warp account for the driving breaks this vehicle requires. The
+        // per-move candidate proposals remain break-blind for now.
+        std::vector<Duration> twEarly(nodes.size());
+        std::vector<Duration> twLate(nodes.size());
+        std::vector<Duration> service(nodes.size());
+        for (size_t idx = 0; idx != nodes.size(); ++idx)
+        {
+            if (nodes[idx]->isDepot())
+            {
+                auto const &depot = data.depot(nodes[idx]->idx());
+                twEarly[idx] = depot.twEarly;
+                twLate[idx] = depot.twLate;
+                service[idx] = depot.serviceDuration;
+            }
+            else
+            {
+                auto const &client = data.client(nodes[idx]->idx());
+                twEarly[idx] = client.twEarly;
+                twLate[idx] = client.twLate;
+                service[idx] = client.serviceDuration;
+            }
+        }
+        service.back() = 0;  // end depot service is not counted
+
+        auto const timing = simulateBreaks(durAfter[0].startEarly(),
+                                           locations,
+                                           twEarly,
+                                           twLate,
+                                           service,
+                                           durations,
+                                           vehicleType_.maxContinuousDriving,
+                                           vehicleType_.breakDuration,
+                                           maxDuration());
+        duration_ = timing.duration;
+        timeWarp_ = timing.timeWarp;
+    }
 
     auto const overtime = std::max<Duration>(duration_ - shiftDuration(), 0);
     durationCost_ = unitDurationCost() * static_cast<Cost>(duration_)
