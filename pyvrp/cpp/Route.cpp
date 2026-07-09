@@ -205,6 +205,109 @@ void Route::setSchedule(ProblemData const &data, Activities const &activities)
            end.twEarly,
            end.twLate,
            0);
+
+    if (vehData.breaksEnabled())
+        applyBreaks(data, activities);
+}
+
+void Route::applyBreaks(ProblemData const &data, Activities const &activities)
+{
+    // Recomputes duration_ and time_warp_ so that they account for the driving
+    // breaks this vehicle type requires. The route's stop sequence and start
+    // time are kept fixed; the timeline is simulated forward from startTime_,
+    // inserting a break whenever continuous driving reaches the limit (a break
+    // may fall part-way along a leg). This mirrors
+    // pyvrp.breaks.schedule.plan_route_breaks, which is the reference. Unlike
+    // the solver's usual "teleport" time warp, lateness here cascades forward
+    // (now is not reset by time warp), matching a real driver's clock.
+    auto const &vehData = data.vehicleType(vehicleType_);
+    auto const &durations = data.durationMatrix(vehData.profile);
+    auto const &start = data.depot(vehData.startDepot);
+    auto const &end = data.depot(vehData.endDepot);
+
+    auto const maxContinuous = vehData.maxContinuousDriving;
+    auto const breakDuration = vehData.breakDuration;
+
+    Duration now = startTime_;
+    Duration drivingSinceBreak = 0;
+    Duration waitTotal = 0;
+    Duration twTotal = 0;
+    Duration breakTotal = 0;
+    size_t prevLoc = start.location;
+
+    // Start depot: startTime_ already respects its window, so no wait here.
+    now += start.serviceDuration;
+
+    auto const driveLeg = [&](size_t loc)
+    {
+        Duration remaining = durations(prevLoc, loc);
+        while (remaining > 0)
+        {
+            Duration const room = maxContinuous - drivingSinceBreak;
+            if (room <= 0)  // a break is required before driving further
+            {
+                breakTotal += breakDuration;
+                now += breakDuration;
+                drivingSinceBreak = 0;
+                continue;
+            }
+
+            Duration const drive = std::min(remaining, room);
+            now += drive;
+            drivingSinceBreak += drive;
+            remaining -= drive;
+        }
+        prevLoc = loc;
+    };
+
+    auto const arrive
+        = [&](Duration twEarly, Duration twLate, Duration service)
+    {
+        Duration const wait = std::max<Duration>(twEarly - now, 0);
+        if (wait >= breakDuration)  // a long enough wait satisfies a break
+            drivingSinceBreak = 0;
+        now = std::max(now, twEarly);
+        twTotal += std::max<Duration>(now - twLate, 0);
+        waitTotal += wait;
+        now += service;
+    };
+
+    for (auto const &activity : activities)
+    {
+        auto const loc = activity.isDepot()
+                             ? data.depot(activity.idx()).location
+                             : data.client(activity.idx()).location;
+        driveLeg(loc);
+
+        if (activity.isDepot())
+        {
+            auto const &depot = data.depot(activity.idx());
+            arrive(depot.twEarly, depot.twLate, depot.serviceDuration);
+        }
+        else
+        {
+            auto const &client = data.client(activity.idx());
+            arrive(client.twEarly, client.twLate, client.serviceDuration);
+        }
+    }
+
+    driveLeg(end.location);
+    arrive(end.twEarly, end.twLate, 0);
+
+    // Total time actually spent = driving + service + waiting + breaks. Time
+    // warp is tracked separately (it does not extend the timeline).
+    duration_ = travel_ + service_ + waitTotal + breakTotal;
+    timeWarp_ = twTotal;
+
+    // Fold any maximum-duration violation into time warp, as the segment-based
+    // timeWarp(maxDuration) does on the non-break path.
+    auto const netDuration = duration_ - timeWarp_;
+    if (netDuration > vehData.maxDuration)
+        timeWarp_ += netDuration - vehData.maxDuration;
+
+    overtime_ = std::max<Duration>(duration_ - vehData.shiftDuration, 0);
+    durationCost_ = vehData.unitDurationCost * static_cast<Cost>(duration_)
+                    + vehData.unitOvertimeCost * static_cast<Cost>(overtime_);
 }
 
 void Route::setDistance(ProblemData const &data)

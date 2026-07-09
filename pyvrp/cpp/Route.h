@@ -26,6 +26,7 @@ class Route
 
     void validate(ProblemData const &data, Activities const &activities) const;
     void setSchedule(ProblemData const &data, Activities const &activities);
+    void applyBreaks(ProblemData const &data, Activities const &activities);
     void setDistance(ProblemData const &data);
     void setLoad(ProblemData const &data);
     void setOtherStatistics(ProblemData const &data);
