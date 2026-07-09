@@ -100,56 +100,25 @@ def test_native_matches_plan_route_breaks(name, dur, windows, service, visits):
     assert_equal(route.time_warp(), schedule.time_warp)
 
 
-@pytest.mark.parametrize(
-    ("name", "dur", "windows", "service", "visits"),
-    CASES,
-    ids=[c[0] for c in CASES],
-)
-def test_search_route_matches_plan_route_breaks(
-    name, dur, windows, service, visits
-):
+def test_search_route_is_break_blind():
     """
-    The search-side ``Route`` (used during optimisation) is also break-aware:
-    its ``duration()`` and ``time_warp()`` match ``plan_route_breaks``.
+    The search-side ``Route`` uses the plain (break-blind) segment algebra, so
+    its ``duration()`` excludes break time -- this keeps the local search's
+    incremental cost bookkeeping associative and terminating. Breaks are
+    accounted for exactly only on the finalised solution ``Route`` (see
+    ``test_solution_route_matches_plan_route_breaks``).
     """
-    ref_data = _data(dur, windows, service, breaks=False)
-    schedule = plan_route_breaks(Route(ref_data, visits, 0), ref_data, BREAKS_ONLY)
-    ref_span = schedule.entries[-1].end_time - schedule.entries[0].start_time
+    dur = [[0, 600], [600, 0]]  # a route that requires breaks
+    data = _data(dur, {}, 0, breaks=True)
 
-    data = _data(dur, windows, service, breaks=True)
-    route = SearchRoute(data, 0)
-    for idx in visits:
-        route.append(Node(ActivityType.CLIENT, idx))
-    route.update()
+    search = SearchRoute(data, 0)
+    search.append(Node(ActivityType.CLIENT, 0))
+    search.update()
 
-    assert_equal(route.duration(), ref_span)
-    assert_equal(route.time_warp(), schedule.time_warp)
+    solution = Route(data, [0], 0)
 
-
-@pytest.mark.parametrize(
-    ("name", "dur", "windows", "service", "visits"),
-    CASES,
-    ids=[c[0] for c in CASES],
-)
-def test_merge_term_never_undercounts(name, dur, windows, service, visits):
-    """
-    The conservative break term in DurationSegment::merge (used for
-    candidate-move ranking) must never under-count break time relative to the
-    exact evaluation. The cached full-route segment duration
-    (``duration_after(0)``) must therefore be at least the exact break-aware
-    ``duration()`` -- equal without wait-absorption, larger with it.
-    """
-    data = _data(dur, windows, service, breaks=True)
-    route = SearchRoute(data, 0)
-    for idx in visits:
-        route.append(Node(ActivityType.CLIENT, idx))
-    route.update()
-
-    # duration_after(0) is the cached full-route segment built with the
-    # conservative merge term; its duration must be at least the exact one.
-    merged = route.duration_after(0)
-    assert merged.duration() >= route.duration()
-    assert merged.time_warp() >= route.time_warp()
+    assert_equal(search.duration(), 2 * 600)  # travel only, no break time
+    assert search.duration() < solution.duration()  # solution includes breaks
 
 
 def test_breaks_extend_duration_over_disabled():

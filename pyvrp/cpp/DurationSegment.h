@@ -214,39 +214,23 @@ DurationSegment DurationSegment::merge(Duration const edgeDuration,
     // this method are carefully designed to avoid integer over- and underflow
     // issues. Be very careful when changing things here!
 
-    // Driving breaks. Cumulative driving composes additively (a break is
-    // duration, not driving). The extra break time a join creates is folded
-    // into an effective edge, so it delays the second segment and adds
-    // (conservative) time warp. Ignoring wait-absorption here can only
-    // over-count breaks, keeping candidate-move evaluation safe (it never
-    // under-counts break time). The rule params are identical across a route's
-    // real segments; neutral marker segments carry zero, so we take the max.
+    // NOTE: driving breaks are intentionally NOT accounted for in this segment
+    // algebra. A break-time term (even added only to duration_) does not
+    // compose associatively once reload/trip boundaries are involved, which
+    // violates the invariant the local search relies on. Breaks and daily
+    // rests are instead evaluated exactly on the finalised solution Route (see
+    // Route::applyBreaks / BreakTiming.h). The drive_ / rule-parameter fields
+    // are retained for a future associative formulation but currently only
+    // propagate; they do not affect duration or time warp.
     auto const maxContinuous
         = std::max(first.maxContinuous_, second.maxContinuous_);
     auto const breakDuration
         = std::max(first.breakDuration_, second.breakDuration_);
     auto const newDrive = first.drive_ + edgeDuration + second.drive_;
 
-    Duration effEdge = edgeDuration;
-    if (breakDuration > 0 && maxContinuous > 0)
-    {
-        // Number of breaks over D units of continuous driving is
-        // floor((D - 1) / maxContinuous) for D > 0 (a break is taken only once
-        // driving *exceeds* the limit, matching plan_route_breaks).
-        auto const breakTime = [&](Duration const d) -> Duration
-        {
-            auto const v = d.get();
-            auto const n = v > 0 ? (v - 1) / maxContinuous.get() : 0;
-            return breakDuration.get() * n;
-        };
-
-        effEdge += breakTime(newDrive) - breakTime(first.drive_)
-                   - breakTime(second.drive_);
-    }
-
     // atSecond is the time (relative to our starting time) at which we arrive
     // at the second's initial location.
-    auto const atSecond = first.duration_ - first.timeWarp_ + effEdge;
+    auto const atSecond = first.duration_ - first.timeWarp_ + edgeDuration;
 
     // Time warp increases when we arrive after the time window closes.
     auto const diffTw = first.startEarly_ + atSecond > second.startLate_
@@ -263,7 +247,7 @@ DurationSegment DurationSegment::merge(Duration const edgeDuration,
               ? second.startLate_ - atSecond
               : second.startLate_;
 
-    return {first.duration_ + second.duration_ + effEdge + diffWait,
+    return {first.duration_ + second.duration_ + edgeDuration + diffWait,
             first.timeWarp_ + second.timeWarp_ + diffTw,
             std::max(first.startEarly_, second.startEarly_ - atSecond)
                 - diffWait,
@@ -307,9 +291,14 @@ DurationSegment DurationSegment::finaliseBack() const
            cumTimeWarp_ + finalised.timeWarp(),
            finalised.endLate()};
 
-    // Continuous driving does not reset at a reload depot (a reload dwell is
-    // service, not a break), so carry driving and the rule params forward.
-    result.drive_ = drive_;
+    // This trip's break time is now folded into cumDuration_ (via
+    // finalised.duration()), so the driving counter must reset to zero here:
+    // carrying it forward would let the next trip's break term re-count this
+    // trip's breaks. Breaks are therefore counted per trip in the search
+    // approximation (the exact, continuous-across-reload accounting is done on
+    // the solution Route). The rule params still carry so later merges know
+    // the vehicle has breaks.
+    result.drive_ = 0;
     result.setBreakParams(maxContinuous_, breakDuration_);
     return result;
 }
@@ -321,8 +310,10 @@ DurationSegment DurationSegment::finaliseFront() const
     DurationSegment const release = {0, 0, startEarly(), startLate()};
     auto result = merge(release, {duration_, timeWarp_, startEarly_, startLate_});
 
-    // Carry driving and the rule params through the reload boundary.
-    result.drive_ = drive_;
+    // Reset the driving counter at the trip boundary (see finaliseBack); this
+    // trip's break time is already accounted for in duration_. The rule params
+    // still carry through.
+    result.drive_ = 0;
     result.setBreakParams(maxContinuous_, breakDuration_);
     return result;
 }

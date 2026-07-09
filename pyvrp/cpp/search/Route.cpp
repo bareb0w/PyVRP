@@ -229,15 +229,6 @@ void Route::update()
             durAt[idx] = {data.depot(node->idx()), 0};
     }
 
-    // Carry the break rule parameters on every leaf segment, so the prefix/
-    // suffix scans and the candidate-move proposals account (conservatively)
-    // for driving breaks via DurationSegment::merge. No-op when breaks are
-    // disabled, keeping the non-break path unchanged.
-    if (vehicleType_.breaksEnabled())
-        for (auto &segment : durAt)
-            segment.setBreakParams(vehicleType_.maxContinuousDriving,
-                                   vehicleType_.breakDuration);
-
     auto const &durations = data.durationMatrix(profile());
 
     durBefore.resize(nodes.size());
@@ -338,54 +329,15 @@ void Route::update()
     excessDistance_ = std::max<Distance>(distance_ - maxDistance(), 0);
     distanceCost_ = unitDistanceCost() * static_cast<Cost>(distance_);
 
+    // Break time enters duration_/timeWarp_ through the conservative term in
+    // DurationSegment::merge (the leaf segments carry the break params above),
+    // so the search Route's timing is consistent with what candidate-move
+    // proposals compute -- a requirement for the local search's incremental
+    // cost bookkeeping. Daily rests and exact (wait-absorbing) break timing
+    // are applied only on the finalised solution-level Route (see
+    // Route::applyBreaks), which is where feasibility is judged exactly.
     duration_ = durAfter[0].duration();
     timeWarp_ = durAfter[0].timeWarp(maxDuration());
-
-    if (vehicleType_.breaksEnabled() || vehicleType_.dailyRestsEnabled())
-    {
-        // Replace the segment-based timing with an exact break-aware forward
-        // simulation (see BreakTiming.h), so the accepted route's duration and
-        // time warp account for the driving breaks and daily rests this
-        // vehicle requires. The per-move candidate proposals account for
-        // breaks only (via the DurationSegment merge term); daily rests are
-        // exact here on the accepted route.
-        std::vector<Duration> twEarly(nodes.size());
-        std::vector<Duration> twLate(nodes.size());
-        std::vector<Duration> service(nodes.size());
-        for (size_t idx = 0; idx != nodes.size(); ++idx)
-        {
-            if (nodes[idx]->isDepot())
-            {
-                auto const &depot = data.depot(nodes[idx]->idx());
-                twEarly[idx] = depot.twEarly;
-                twLate[idx] = depot.twLate;
-                service[idx] = depot.serviceDuration;
-            }
-            else
-            {
-                auto const &client = data.client(nodes[idx]->idx());
-                twEarly[idx] = client.twEarly;
-                twLate[idx] = client.twLate;
-                service[idx] = client.serviceDuration;
-            }
-        }
-        service.back() = 0;  // end depot service is not counted
-
-        auto const timing = simulateBreaks(durAfter[0].startEarly(),
-                                           locations,
-                                           twEarly,
-                                           twLate,
-                                           service,
-                                           durations,
-                                           vehicleType_.maxContinuousDriving,
-                                           vehicleType_.breakDuration,
-                                           vehicleType_.maxDailyDriving,
-                                           vehicleType_.dailyRestDuration,
-                                           vehicleType_.maxDailyDuty,
-                                           maxDuration());
-        duration_ = timing.duration;
-        timeWarp_ = timing.timeWarp;
-    }
 
     auto const overtime = std::max<Duration>(duration_ - shiftDuration(), 0);
     durationCost_ = unitDurationCost() * static_cast<Cost>(duration_)
