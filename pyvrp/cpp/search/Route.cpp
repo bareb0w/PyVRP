@@ -229,6 +229,15 @@ void Route::update()
             durAt[idx] = {data.depot(node->idx()), 0};
     }
 
+    // Carry the break rule parameters on every leaf segment, so the prefix/
+    // suffix scans and the candidate-move proposals account (conservatively)
+    // for driving breaks via DurationSegment::merge. No-op when breaks are
+    // disabled, keeping the non-break path unchanged.
+    if (vehicleType_.breaksEnabled())
+        for (auto &segment : durAt)
+            segment.setBreakParams(vehicleType_.maxContinuousDriving,
+                                   vehicleType_.breakDuration);
+
     auto const &durations = data.durationMatrix(profile());
 
     durBefore.resize(nodes.size());

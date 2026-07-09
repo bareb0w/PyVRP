@@ -59,8 +59,22 @@ class DurationSegment
     Duration cumTimeWarp_ = 0;  // cumulative, excl. current trip
     Duration prevEndLate_
         = std::numeric_limits<Duration>::max();  // of prev trip
+    // Break accounting (a conservative, never-under-counting estimate used to
+    // give the search a driving-break gradient; the exact break timing of an
+    // accepted route is computed separately). drive_ is cumulative driving on
+    // the current trip; the two rule fields are carried identically across a
+    // route's segments and are zero when this vehicle has no breaks.
+    Duration drive_ = 0;
+    Duration maxContinuous_ = 0;
+    Duration breakDuration_ = 0;
 
 public:
+    /**
+     * Sets this vehicle type's break rule parameters on the segment. Breaks
+     * are accounted for during concatenation only when both are positive.
+     */
+    inline void setBreakParams(Duration maxContinuous, Duration breakDuration);
+
     [[nodiscard]] static inline DurationSegment
     merge(Duration const edgeDuration,
           DurationSegment const &first,
@@ -171,7 +185,10 @@ public:
                            Duration cumDuration = 0,
                            Duration cumTimeWarp = 0,
                            Duration prevEndLate
-                           = std::numeric_limits<Duration>::max());
+                           = std::numeric_limits<Duration>::max(),
+                           Duration drive = 0,
+                           Duration maxContinuous = 0,
+                           Duration breakDuration = 0);
 
     // Move or copy construct from the other duration segment.
     inline DurationSegment(DurationSegment const &) = default;
@@ -182,6 +199,13 @@ public:
     inline DurationSegment &operator=(DurationSegment &&) = default;
 };
 
+void DurationSegment::setBreakParams(Duration maxContinuous,
+                                     Duration breakDuration)
+{
+    maxContinuous_ = maxContinuous;
+    breakDuration_ = breakDuration;
+}
+
 DurationSegment DurationSegment::merge(Duration const edgeDuration,
                                        DurationSegment const &first,
                                        DurationSegment const &second)
@@ -190,9 +214,39 @@ DurationSegment DurationSegment::merge(Duration const edgeDuration,
     // this method are carefully designed to avoid integer over- and underflow
     // issues. Be very careful when changing things here!
 
+    // Driving breaks. Cumulative driving composes additively (a break is
+    // duration, not driving). The extra break time a join creates is folded
+    // into an effective edge, so it delays the second segment and adds
+    // (conservative) time warp. Ignoring wait-absorption here can only
+    // over-count breaks, keeping candidate-move evaluation safe (it never
+    // under-counts break time). The rule params are identical across a route's
+    // real segments; neutral marker segments carry zero, so we take the max.
+    auto const maxContinuous
+        = std::max(first.maxContinuous_, second.maxContinuous_);
+    auto const breakDuration
+        = std::max(first.breakDuration_, second.breakDuration_);
+    auto const newDrive = first.drive_ + edgeDuration + second.drive_;
+
+    Duration effEdge = edgeDuration;
+    if (breakDuration > 0 && maxContinuous > 0)
+    {
+        // Number of breaks over D units of continuous driving is
+        // floor((D - 1) / maxContinuous) for D > 0 (a break is taken only once
+        // driving *exceeds* the limit, matching plan_route_breaks).
+        auto const breakTime = [&](Duration const d) -> Duration
+        {
+            auto const v = d.get();
+            auto const n = v > 0 ? (v - 1) / maxContinuous.get() : 0;
+            return breakDuration.get() * n;
+        };
+
+        effEdge += breakTime(newDrive) - breakTime(first.drive_)
+                   - breakTime(second.drive_);
+    }
+
     // atSecond is the time (relative to our starting time) at which we arrive
     // at the second's initial location.
-    auto const atSecond = first.duration_ - first.timeWarp_ + edgeDuration;
+    auto const atSecond = first.duration_ - first.timeWarp_ + effEdge;
 
     // Time warp increases when we arrive after the time window closes.
     auto const diffTw = first.startEarly_ + atSecond > second.startLate_
@@ -209,7 +263,7 @@ DurationSegment DurationSegment::merge(Duration const edgeDuration,
               ? second.startLate_ - atSecond
               : second.startLate_;
 
-    return {first.duration_ + second.duration_ + edgeDuration + diffWait,
+    return {first.duration_ + second.duration_ + effEdge + diffWait,
             first.timeWarp_ + second.timeWarp_ + diffTw,
             std::max(first.startEarly_, second.startEarly_ - atSecond)
                 - diffWait,
@@ -217,7 +271,10 @@ DurationSegment DurationSegment::merge(Duration const edgeDuration,
             std::max(first.releaseTime_, second.releaseTime_),
             first.cumDuration_ + second.cumDuration_,
             first.cumTimeWarp_ + second.cumTimeWarp_,
-            first.prevEndLate_};  // field is evaluated left-to-right
+            first.prevEndLate_,  // field is evaluated left-to-right
+            newDrive,
+            maxContinuous,
+            breakDuration};
 }
 
 DurationSegment DurationSegment::merge(DurationSegment const &first,
@@ -235,19 +292,26 @@ DurationSegment DurationSegment::finaliseBack() const
     DurationSegment const prev = {0, 0, 0, prevEndLate_};
     DurationSegment const finalised = merge(prev, finaliseFront());
 
-    return {0,
-            0,
-            finalised.endEarly(),
-            // The next trip is free to start at any time after this trip can
-            // end, so the latest start is not constrained. However, starting
-            // after our latest end will incur wait duration at the depot.
-            std::numeric_limits<Duration>::max(),
-            // The next trip cannot leave the depot before we return, so we
-            // impose our earliest end as a release time.
-            finalised.endEarly(),
-            cumDuration_ + finalised.duration(),
-            cumTimeWarp_ + finalised.timeWarp(),
-            finalised.endLate()};
+    DurationSegment result
+        = {0,
+           0,
+           finalised.endEarly(),
+           // The next trip is free to start at any time after this trip can
+           // end, so the latest start is not constrained. However, starting
+           // after our latest end will incur wait duration at the depot.
+           std::numeric_limits<Duration>::max(),
+           // The next trip cannot leave the depot before we return, so we
+           // impose our earliest end as a release time.
+           finalised.endEarly(),
+           cumDuration_ + finalised.duration(),
+           cumTimeWarp_ + finalised.timeWarp(),
+           finalised.endLate()};
+
+    // Continuous driving does not reset at a reload depot (a reload dwell is
+    // service, not a break), so carry driving and the rule params forward.
+    result.drive_ = drive_;
+    result.setBreakParams(maxContinuous_, breakDuration_);
+    return result;
 }
 
 DurationSegment DurationSegment::finaliseFront() const
@@ -255,7 +319,12 @@ DurationSegment DurationSegment::finaliseFront() const
     // We finalise at the start of this segment. This is pretty easy, via a
     // merge with our release times, if they are binding.
     DurationSegment const release = {0, 0, startEarly(), startLate()};
-    return merge(release, {duration_, timeWarp_, startEarly_, startLate_});
+    auto result = merge(release, {duration_, timeWarp_, startEarly_, startLate_});
+
+    // Carry driving and the rule params through the reload boundary.
+    result.drive_ = drive_;
+    result.setBreakParams(maxContinuous_, breakDuration_);
+    return result;
 }
 
 Duration DurationSegment::duration() const
@@ -315,7 +384,10 @@ DurationSegment::DurationSegment(Duration duration,
                                  Duration releaseTime,
                                  Duration cumDuration,
                                  Duration cumTimeWarp,
-                                 Duration prevEndLate)
+                                 Duration prevEndLate,
+                                 Duration drive,
+                                 Duration maxContinuous,
+                                 Duration breakDuration)
     : duration_(duration),
       timeWarp_(timeWarp),
       startEarly_(startEarly),
@@ -323,7 +395,10 @@ DurationSegment::DurationSegment(Duration duration,
       releaseTime_(releaseTime),
       cumDuration_(cumDuration),
       cumTimeWarp_(cumTimeWarp),
-      prevEndLate_(prevEndLate)
+      prevEndLate_(prevEndLate),
+      drive_(drive),
+      maxContinuous_(maxContinuous),
+      breakDuration_(breakDuration)
 {
 }
 }  // namespace pyvrp

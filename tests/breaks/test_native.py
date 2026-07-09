@@ -126,6 +126,32 @@ def test_search_route_matches_plan_route_breaks(
     assert_equal(route.time_warp(), schedule.time_warp)
 
 
+@pytest.mark.parametrize(
+    ("name", "dur", "windows", "service", "visits"),
+    CASES,
+    ids=[c[0] for c in CASES],
+)
+def test_merge_term_never_undercounts(name, dur, windows, service, visits):
+    """
+    The conservative break term in DurationSegment::merge (used for
+    candidate-move ranking) must never under-count break time relative to the
+    exact evaluation. The cached full-route segment duration
+    (``duration_after(0)``) must therefore be at least the exact break-aware
+    ``duration()`` -- equal without wait-absorption, larger with it.
+    """
+    data = _data(dur, windows, service, breaks=True)
+    route = SearchRoute(data, 0)
+    for idx in visits:
+        route.append(Node(ActivityType.CLIENT, idx))
+    route.update()
+
+    # duration_after(0) is the cached full-route segment built with the
+    # conservative merge term; its duration must be at least the exact one.
+    merged = route.duration_after(0)
+    assert merged.duration() >= route.duration()
+    assert merged.time_warp() >= route.time_warp()
+
+
 def test_breaks_extend_duration_over_disabled():
     """
     A route long enough to require a break has a strictly larger duration when
