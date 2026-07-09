@@ -48,6 +48,9 @@ VehicleType::VehicleType(size_t numAvailable,
                          Cost unitOvertimeCost,
                          Duration maxContinuousDriving,
                          Duration breakDuration,
+                         Duration maxDailyDriving,
+                         Duration dailyRestDuration,
+                         Duration maxDailyDuty,
                          std::string name)
     : numAvailable(numAvailable),
       startDepot(startDepot),
@@ -69,6 +72,9 @@ VehicleType::VehicleType(size_t numAvailable,
       unitOvertimeCost(unitOvertimeCost),
       maxContinuousDriving(maxContinuousDriving),
       breakDuration(breakDuration),
+      maxDailyDriving(maxDailyDriving),
+      dailyRestDuration(dailyRestDuration),
+      maxDailyDuty(maxDailyDuty),
       // We need to check >= 0 here to avoid overflow. If the arguments are
       // negative the validation checks further below will raise, so it doesn't
       // matter what we set as long as we get to those checks.
@@ -132,6 +138,31 @@ VehicleType::VehicleType(size_t numAvailable,
             = "break_duration > 0 requires a finite max_continuous_driving.";
         throw std::invalid_argument(msg);
     }
+
+    if (maxDailyDriving < 0)
+        throw std::invalid_argument("max_daily_driving must be >= 0.");
+
+    if (dailyRestDuration < 0)
+        throw std::invalid_argument("daily_rest_duration must be >= 0.");
+
+    if (maxDailyDuty < 0)
+        throw std::invalid_argument("max_daily_duty must be >= 0.");
+
+    auto const inf = std::numeric_limits<Duration>::max();
+    if (dailyRestDuration > 0 && maxDailyDriving == inf && maxDailyDuty == inf)
+    {
+        auto const *msg = "daily_rest_duration > 0 requires a finite "
+                          "max_daily_driving or max_daily_duty.";
+        throw std::invalid_argument(msg);
+    }
+
+    if (maxDailyDriving < inf && maxDailyDriving < maxContinuousDriving)
+        throw std::invalid_argument(
+            "max_daily_driving must be >= max_continuous_driving.");
+
+    if (maxDailyDuty < inf && maxDailyDuty < maxDailyDriving)
+        throw std::invalid_argument(
+            "max_daily_duty must be >= max_daily_driving.");
 }
 
 VehicleType::VehicleType(VehicleType const &vehicleType)
@@ -155,6 +186,9 @@ VehicleType::VehicleType(VehicleType const &vehicleType)
       unitOvertimeCost(vehicleType.unitOvertimeCost),
       maxContinuousDriving(vehicleType.maxContinuousDriving),
       breakDuration(vehicleType.breakDuration),
+      maxDailyDriving(vehicleType.maxDailyDriving),
+      dailyRestDuration(vehicleType.dailyRestDuration),
+      maxDailyDuty(vehicleType.maxDailyDuty),
       maxDuration(vehicleType.maxDuration),
       name(duplicate(vehicleType.name))
 {
@@ -181,6 +215,9 @@ VehicleType::VehicleType(VehicleType &&vehicleType)
       unitOvertimeCost(vehicleType.unitOvertimeCost),
       maxContinuousDriving(vehicleType.maxContinuousDriving),
       breakDuration(vehicleType.breakDuration),
+      maxDailyDriving(vehicleType.maxDailyDriving),
+      dailyRestDuration(vehicleType.dailyRestDuration),
+      maxDailyDuty(vehicleType.maxDailyDuty),
       maxDuration(vehicleType.maxDuration),
       name(vehicleType.name)  // we can steal
 {
@@ -210,6 +247,9 @@ VehicleType::replace(std::optional<size_t> numAvailable,
                      std::optional<Cost> unitOvertimeCost,
                      std::optional<Duration> maxContinuousDriving,
                      std::optional<Duration> breakDuration,
+                     std::optional<Duration> maxDailyDriving,
+                     std::optional<Duration> dailyRestDuration,
+                     std::optional<Duration> maxDailyDuty,
                      std::optional<std::string> name) const
 {
     return {numAvailable.value_or(this->numAvailable),
@@ -232,6 +272,9 @@ VehicleType::replace(std::optional<size_t> numAvailable,
             unitOvertimeCost.value_or(this->unitOvertimeCost),
             maxContinuousDriving.value_or(this->maxContinuousDriving),
             breakDuration.value_or(this->breakDuration),
+            maxDailyDriving.value_or(this->maxDailyDriving),
+            dailyRestDuration.value_or(this->dailyRestDuration),
+            maxDailyDuty.value_or(this->maxDailyDuty),
             name.value_or(this->name)};
 }
 
@@ -239,6 +282,12 @@ bool VehicleType::breaksEnabled() const
 {
     return breakDuration > 0
            && maxContinuousDriving < std::numeric_limits<Duration>::max();
+}
+
+bool VehicleType::dailyRestsEnabled() const
+{
+    auto const inf = std::numeric_limits<Duration>::max();
+    return dailyRestDuration > 0 && (maxDailyDriving < inf || maxDailyDuty < inf);
 }
 
 size_t VehicleType::maxTrips() const
@@ -271,6 +320,9 @@ bool VehicleType::operator==(VehicleType const &other) const
         && unitOvertimeCost == other.unitOvertimeCost
         && maxContinuousDriving == other.maxContinuousDriving
         && breakDuration == other.breakDuration
+        && maxDailyDriving == other.maxDailyDriving
+        && dailyRestDuration == other.dailyRestDuration
+        && maxDailyDuty == other.maxDailyDuty
         && std::strcmp(name, other.name) == 0;
     // clang-format on
 }

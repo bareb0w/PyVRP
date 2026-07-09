@@ -208,7 +208,7 @@ void Route::setSchedule(ProblemData const &data, Activities const &activities)
            end.twLate,
            0);
 
-    if (vehData.breaksEnabled())
+    if (vehData.breaksEnabled() || vehData.dailyRestsEnabled())
         applyBreaks(data, activities);
 }
 
@@ -261,6 +261,9 @@ void Route::applyBreaks(ProblemData const &data, Activities const &activities)
                                                      durations,
                                                      vehData.maxContinuousDriving,
                                                      vehData.breakDuration,
+                                                     vehData.maxDailyDriving,
+                                                     vehData.dailyRestDuration,
+                                                     vehData.maxDailyDuty,
                                                      vehData.maxDuration);
     duration_ = duration;
     timeWarp_ = timeWarp;

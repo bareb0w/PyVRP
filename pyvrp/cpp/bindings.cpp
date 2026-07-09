@@ -388,6 +388,9 @@ PYBIND11_MODULE(_pyvrp, m)
                       pyvrp::Cost,
                       pyvrp::Duration,
                       pyvrp::Duration,
+                      pyvrp::Duration,
+                      pyvrp::Duration,
+                      pyvrp::Duration,
                       char const *>(),
              py::arg("num_available") = 1,
              py::arg("capacity") = py::list(),
@@ -412,6 +415,11 @@ PYBIND11_MODULE(_pyvrp, m)
              py::arg("max_continuous_driving")
              = std::numeric_limits<pyvrp::Duration>::max(),
              py::arg("break_duration") = 0,
+             py::arg("max_daily_driving")
+             = std::numeric_limits<pyvrp::Duration>::max(),
+             py::arg("daily_rest_duration") = 0,
+             py::arg("max_daily_duty")
+             = std::numeric_limits<pyvrp::Duration>::max(),
              py::kw_only(),
              py::arg("name") = "")
         .def_readonly("num_available", &VehicleType::numAvailable)
@@ -441,6 +449,9 @@ PYBIND11_MODULE(_pyvrp, m)
         .def_readonly("max_continuous_driving",
                       &VehicleType::maxContinuousDriving)
         .def_readonly("break_duration", &VehicleType::breakDuration)
+        .def_readonly("max_daily_driving", &VehicleType::maxDailyDriving)
+        .def_readonly("daily_rest_duration", &VehicleType::dailyRestDuration)
+        .def_readonly("max_daily_duty", &VehicleType::maxDailyDuty)
         .def_readonly("max_duration", &VehicleType::maxDuration)
         .def_property_readonly("max_trips", &VehicleType::maxTrips)
         .def_readonly("name",
@@ -468,6 +479,9 @@ PYBIND11_MODULE(_pyvrp, m)
              py::arg("unit_overtime_cost") = py::none(),
              py::arg("max_continuous_driving") = py::none(),
              py::arg("break_duration") = py::none(),
+             py::arg("max_daily_driving") = py::none(),
+             py::arg("daily_rest_duration") = py::none(),
+             py::arg("max_daily_duty") = py::none(),
              py::kw_only(),
              py::arg("name") = py::none(),
              DOC(pyvrp, VehicleType, replace))
@@ -494,6 +508,9 @@ PYBIND11_MODULE(_pyvrp, m)
                                       vehicleType.unitOvertimeCost,
                                       vehicleType.maxContinuousDriving,
                                       vehicleType.breakDuration,
+                                      vehicleType.maxDailyDriving,
+                                      vehicleType.dailyRestDuration,
+                                      vehicleType.maxDailyDuty,
                                       vehicleType.name);
             },
             [](py::tuple t) {  // __setstate__
@@ -518,7 +535,10 @@ PYBIND11_MODULE(_pyvrp, m)
                     t[17].cast<pyvrp::Cost>(),      // unit overtime cost
                     t[18].cast<pyvrp::Duration>(),  // max continuous driving
                     t[19].cast<pyvrp::Duration>(),  // break duration
-                    t[20].cast<std::string>());     // name
+                    t[20].cast<pyvrp::Duration>(),  // max daily driving
+                    t[21].cast<pyvrp::Duration>(),  // daily rest duration
+                    t[22].cast<pyvrp::Duration>(),  // max daily duty
+                    t[23].cast<std::string>());     // name
 
                 return vehicleType;
             }))

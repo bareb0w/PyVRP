@@ -379,6 +379,67 @@ def test_raises_invalid_break_data(
         )
 
 
+def test_daily_rest_params_default_and_access():
+    """
+    Daily-rest parameters default to disabled and can be set and read back.
+    """
+    default = VehicleType()
+    assert_equal(default.daily_rest_duration, 0)
+    assert_equal(default.max_daily_driving, _INT_MAX)
+    assert_equal(default.max_daily_duty, _INT_MAX)
+
+    veh_type = VehicleType(
+        max_continuous_driving=270,
+        break_duration=45,
+        max_daily_driving=540,
+        daily_rest_duration=660,
+        max_daily_duty=780,
+    )
+    assert_equal(veh_type.max_daily_driving, 540)
+    assert_equal(veh_type.daily_rest_duration, 660)
+    assert_equal(veh_type.max_daily_duty, 780)
+
+    # Survives replace() and a pickle round-trip.
+    replaced = veh_type.replace(daily_rest_duration=600)
+    assert_equal(replaced.daily_rest_duration, 600)
+    assert_equal(replaced.max_daily_driving, 540)
+    assert_(pickle.loads(pickle.dumps(veh_type)) == veh_type)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        (dict(max_daily_driving=-1), "negative max_daily_driving"),
+        (dict(daily_rest_duration=-1), "negative daily_rest_duration"),
+        (dict(max_daily_duty=-1), "negative max_daily_duty"),
+        (dict(daily_rest_duration=660), "rest without a finite daily limit"),
+        (
+            dict(
+                max_continuous_driving=270,
+                break_duration=45,
+                max_daily_driving=200,  # < max_continuous_driving
+                daily_rest_duration=660,
+            ),
+            "max_daily_driving < max_continuous_driving",
+        ),
+        (
+            dict(
+                max_daily_driving=540,
+                daily_rest_duration=660,
+                max_daily_duty=400,  # < max_daily_driving
+            ),
+            "max_daily_duty < max_daily_driving",
+        ),
+    ],
+)
+def test_raises_invalid_daily_rest_data(kwargs, reason):
+    """
+    Tests that invalid daily-rest parameter combinations are rejected.
+    """
+    with assert_raises(ValueError):
+        VehicleType(**kwargs)
+
+
 def test_break_params_replace_and_pickle():
     """
     Tests that break parameters survive replace() and a pickle round-trip, and

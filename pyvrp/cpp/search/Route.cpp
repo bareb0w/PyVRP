@@ -341,12 +341,14 @@ void Route::update()
     duration_ = durAfter[0].duration();
     timeWarp_ = durAfter[0].timeWarp(maxDuration());
 
-    if (vehicleType_.breaksEnabled())
+    if (vehicleType_.breaksEnabled() || vehicleType_.dailyRestsEnabled())
     {
         // Replace the segment-based timing with an exact break-aware forward
         // simulation (see BreakTiming.h), so the accepted route's duration and
-        // time warp account for the driving breaks this vehicle requires. The
-        // per-move candidate proposals remain break-blind for now.
+        // time warp account for the driving breaks and daily rests this
+        // vehicle requires. The per-move candidate proposals account for
+        // breaks only (via the DurationSegment merge term); daily rests are
+        // exact here on the accepted route.
         std::vector<Duration> twEarly(nodes.size());
         std::vector<Duration> twLate(nodes.size());
         std::vector<Duration> service(nodes.size());
@@ -377,6 +379,9 @@ void Route::update()
                                            durations,
                                            vehicleType_.maxContinuousDriving,
                                            vehicleType_.breakDuration,
+                                           vehicleType_.maxDailyDriving,
+                                           vehicleType_.dailyRestDuration,
+                                           vehicleType_.maxDailyDuty,
                                            maxDuration());
         duration_ = timing.duration;
         timeWarp_ = timing.timeWarp;

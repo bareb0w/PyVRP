@@ -32,6 +32,9 @@ namespace pyvrp
  *     unit_overtime_cost: int = 0,
  *     max_continuous_driving: int = np.iinfo(np.int64).max,
  *     break_duration: int = 0,
+ *     max_daily_driving: int = np.iinfo(np.int64).max,
+ *     daily_rest_duration: int = 0,
+ *     max_daily_duty: int = np.iinfo(np.int64).max,
  *     *,
  *     name: str = "",
  * )
@@ -104,6 +107,18 @@ namespace pyvrp
  *     Duration of a break taken once ``max_continuous_driving`` is reached.
  *     Taking a break resets the continuous-driving counter. Default 0 (no
  *     breaks).
+ * max_daily_driving
+ *     Maximum total driving time within a day before a daily (overnight) rest
+ *     is required. Unconstrained (no daily rests) if not provided.
+ * daily_rest_duration
+ *     Duration of a daily (overnight) rest, taken once ``max_daily_driving``
+ *     (or ``max_daily_duty``) is reached. Resets the daily and
+ *     continuous-driving counters and starts a new day. Default 0 (no rests).
+ * max_daily_duty
+ *     Optional maximum length of the working day (span from the day's start to
+ *     the daily rest, including driving, service, breaks and waiting). A daily
+ *     rest is inserted when this would be exceeded. Unconstrained if not
+ *     provided.
  * name
  *     Free-form name field for this vehicle type. Default empty.
  *
@@ -156,6 +171,12 @@ namespace pyvrp
  *     Maximum uninterrupted driving time before a break is required.
  * break_duration
  *     Duration of a break taken once ``max_continuous_driving`` is reached.
+ * max_daily_driving
+ *     Maximum daily driving time before a daily rest is required.
+ * daily_rest_duration
+ *     Duration of a daily (overnight) rest.
+ * max_daily_duty
+ *     Maximum length of the working day before a daily rest is required.
  * max_duration
  *     Hard maximum route duration constraint, computed as the sum of
  *     :py:attr:`~shift_duration` and :py:attr:`~max_overtime`.
@@ -184,6 +205,9 @@ struct VehicleType
     Cost const unitOvertimeCost;             // Cost per unit of overtime
     Duration const maxContinuousDriving;     // Driving before a break (0=off)
     Duration const breakDuration;            // Length of a driving break
+    Duration const maxDailyDriving;    // Driving before a daily rest (max=off)
+    Duration const dailyRestDuration;  // Length of a daily (overnight) rest
+    Duration const maxDailyDuty;       // Working-day span cap (max=off)
     Duration const maxDuration;  // Maximum route duration, incl. overtime
     char const *name;            // Type name (for reference)
 
@@ -208,9 +232,20 @@ struct VehicleType
                 Duration maxContinuousDriving
                 = std::numeric_limits<Duration>::max(),
                 Duration breakDuration = 0,
+                Duration maxDailyDriving
+                = std::numeric_limits<Duration>::max(),
+                Duration dailyRestDuration = 0,
+                Duration maxDailyDuty = std::numeric_limits<Duration>::max(),
                 std::string name = "");
 
     bool operator==(VehicleType const &other) const;
+
+    /**
+     * Whether this vehicle type requires daily (overnight) rests, that is,
+     * whether a positive daily rest duration is set together with a finite
+     * daily-driving or working-day limit.
+     */
+    [[nodiscard]] bool dailyRestsEnabled() const;
 
     /**
      * Whether this vehicle type requires driving breaks, that is, whether a
@@ -251,6 +286,9 @@ struct VehicleType
                         std::optional<Cost> unitOvertimeCost,
                         std::optional<Duration> maxContinuousDriving,
                         std::optional<Duration> breakDuration,
+                        std::optional<Duration> maxDailyDriving,
+                        std::optional<Duration> dailyRestDuration,
+                        std::optional<Duration> maxDailyDuty,
                         std::optional<std::string> name) const;
 
     /**

@@ -180,6 +180,9 @@ class VehicleType:
     unit_overtime_cost: int
     max_continuous_driving: int
     break_duration: int
+    max_daily_driving: int
+    daily_rest_duration: int
+    max_daily_duty: int
     max_duration: int
     name: str
     def __init__(
@@ -204,6 +207,9 @@ class VehicleType:
         unit_overtime_cost: int = 0,
         max_continuous_driving: int = ...,
         break_duration: int = 0,
+        max_daily_driving: int = ...,
+        daily_rest_duration: int = 0,
+        max_daily_duty: int = ...,
         *,
         name: str = "",
     ) -> None: ...
@@ -231,6 +237,9 @@ class VehicleType:
         unit_overtime_cost: int | None = None,
         max_continuous_driving: int | None = None,
         break_duration: int | None = None,
+        max_daily_driving: int | None = None,
+        daily_rest_duration: int | None = None,
+        max_daily_duty: int | None = None,
         *,
         name: str | None = None,
     ) -> VehicleType: ...
